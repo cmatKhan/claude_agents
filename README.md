@@ -13,5 +13,5 @@ In a claude code session
 Eg
 
 ```raw
-/agent bg-worker conduct PCA analysis, including visualizing metadata factors and a scree plot, on input_data
+/agent bg-worker conduct PCA, including visualizing metadata factors and a scree plot, on input_data
 ```
