@@ -15,11 +15,11 @@ Set these up either globally at `~/.claude/agents` or in a project at `./.claude
 In a claude code session
 
 ```raw
-/agent <worker-name> <cmd>
+use <worker-name> <cmd>
 ```
 
 Eg
 
 ```raw
-/agent bg-worker conduct PCA, including visualizing metadata factors and a scree plot, on input_data
+use bg-worker conduct PCA, including visualizing metadata factors and a scree plot, on input_data
 ```
