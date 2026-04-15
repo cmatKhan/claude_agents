@@ -1,5 +1,5 @@
 ---
-name: bulk-rnaseq-timeseries-de
+name: rnaseq-timeseries-de
 description: >
   Differential expression analysis for bulk RNA-seq time series and repeated-measures
   experiments. Use this skill whenever the user has longitudinal RNA-seq data, multiple
@@ -18,7 +18,11 @@ description: >
 
 ## Overview and Method Selection
 
-Time series and repeated-measures RNA-seq experiments present a fundamental challenge: observations from the same subject are not independent. Ignoring this correlation inflates false positives; naive blocking (fixed subject effects) can be severely underpowered. Three primary strategies are covered here:
+Time series and repeated-measures RNA-seq experiments present a fundamental challenge: observations from the same subject are not independent. Ignoring this correlation inflates false positives; naive blocking (fixed subject effects) can be severely underpowered.
+
+**Before choosing a method, consult `references/oh-li-2021-review.md`**, which synthesizes a comprehensive 2021 review (Oh & Li, *Genes* 12:352, PMC7997275) covering 16+ dynamic methods, normalization comparisons, and batch correction recommendations for time course data. What follows is a practical subset of that guidance focused on the three core methods implemented here, plus pointers to alternatives.
+
+### Core methods in this skill
 
 | Method | Handles repeated measures? | Spline/smooth time? | Multiple random effects? | Count-based model? |
 |---|---|---|---|---|
@@ -32,10 +36,55 @@ Time series and repeated-measures RNA-seq experiments present a fundamental chal
 - When you need a native count-based (negative binomial) model, or are testing omnibus hypotheses across many timepoints: use **DESeq2 LRT**.
 - For microarray data (not RNA-seq), see the `timecourse` package section below.
 
+### Alternative methods (from Oh & Li 2021)
+
+Consult `references/oh-li-2021-review.md` Section 2 for full descriptions.
+
+| Scenario | Method | Key feature |
+|---|---|---|
+| Repeated measures, AR correlation between adjacent timepoints | **rmRNAseq** | Continuous autoregressive correlation; voom-based |
+| Two-condition, impulse/on-off dynamics, ≥6 timepoints | **ImpulseDE2** | NB model; no need to pre-specify k |
+| Two-condition, polynomial trajectory, exploratory | **Next maSigPro** | Stepwise model selection; R² per gene |
+| Two-condition, splines + downstream network inference | **splineTimeR** | Unified DE + gene association network |
+| Single-series, classify state transitions | **EBSeq-HMM** | HMM; classifies each transition as DE/EE |
+| Single-series, identify breakpoints and slopes | **Trendy** | Segmented regression + BIC; no replicates required |
+| Circadian / periodic, repeated measures | **LimoRhyde** | Cosinor regression; integrates with limma/voom |
+
 **Code organization conventions:**
 - Analysis functions go in `R/` scripts (one function per file or logically grouped).
 - Quarto notebooks (`.qmd`) are used for display of results; use `.Rmd` only if explicitly requested.
 - In notebooks, set `echo: false` and `message: false` and `warning: false` in YAML or chunk options by default, and show only key outputs.
+
+---
+
+## Agent Delegation
+
+This skill delegates to three specialized agents. Invoke them in order — each
+depends on the prior stage's outputs.
+
+| Agent | File | When to invoke |
+|---|---|---|
+| Code Writer | `agents/code-writer.md` | User asks to write or update R source functions |
+| Tester | `agents/tester.md` | After code-writer finishes, or when user asks to test existing functions |
+| Notebook Writer | `agents/notebook-writer.md` | After tester passes, or when user asks to generate/update the Quarto notebook |
+
+**Typical full workflow:**
+
+1. Read this SKILL.md to understand the analysis context.
+2. Invoke **code-writer** with the method(s) and design description → produces `R/` files.
+3. Invoke **tester** against those files → produces `tests/` files and a pass/fail report.
+4. Once tests pass, invoke **notebook-writer** → produces `analysis.qmd`.
+
+**Partial workflows** are common and fine:
+- User already has R source → skip to tester or notebook-writer.
+- User only wants to add a diagnostic function → invoke code-writer scoped to
+  `R/diagnostics.R` only, then re-run tester.
+- User only wants to regenerate the notebook → invoke notebook-writer directly.
+
+**Shared context** passed to every agent:
+- `skill_path`: path to this SKILL.md (agents must read it before acting)
+- `project_dir`: root of the analysis project
+- `design_description`: plain-language description of the experimental design
 
 ---
 
@@ -516,8 +565,110 @@ Source R scripts with `source("R/filter_genes.R")` etc. Display only key figures
 
 ---
 
-## 8. References
+## 8. Normalization for Time Course Data
 
+Normalization choices have an outsized impact in time series studies because systematic biases can masquerade as temporal trajectories. See `references/oh-li-2021-review.md` Section 4 for the full comparison. Key guidance:
+
+**Always start from raw integer counts.** FPKM and TPM normalize for gene length and are intended for within-sample comparisons only — they must not be used as input to limma/voom, dream, or DESeq2.
+
+**Between-sample normalization methods:**
+
+| Method | Function | Assumption | Use when |
+|---|---|---|---|
+| **TMM** | `edgeR::calcNormFactors(method="TMM")` | Most genes non-DE | Default for voom-based pipelines |
+| **RLE / median-of-ratios** | Internal to `DESeq2::estimateSizeFactors()` | Most genes non-DE | Default for DESeq2 |
+| **Upper Quartile (UQ)** | `edgeR::calcNormFactors(method="upperquartile")` | Upper quartile stable | Large fraction of transcriptome changing |
+| **Total Count / CPM** | — | Library size only bias | Not recommended for DE |
+
+TMM and RLE perform similarly in most settings and are appropriate defaults. UQ is worth considering for strong developmental transitions where a large fraction of genes change — in those cases TMM/RLE can break down because their "most genes non-DE" assumption is violated.
+
+**Pre-filtering** must happen before normalization. Low-count genes inflate dispersion estimates and reduce power. Use `edgeR::filterByExpr()` or the CPM threshold approach in Section 1.
+
+---
+
+## 9. Batch Correction for Time Course Data
+
+Batch effects are especially dangerous in time course studies — an unbalanced batch factor can create or completely mask a temporal trend. See `references/oh-li-2021-review.md` Section 5 for full method details.
+
+### Decision: model vs. pre-correct
+
+**Preferred approach:** include batch as a fixed covariate in the design matrix. This properly propagates uncertainty and avoids double-correction artifacts:
+
+```r
+# limma/voom: add batch to design formula
+design <- model.matrix(~ batch + timepoint + condition, data = meta)
+
+# DESeq2: add batch to both full and reduced designs
+full    <- ~ batch + timepoint + condition:timepoint
+reduced <- ~ batch + timepoint
+```
+
+**When to pre-correct counts:** only when the downstream method cannot accept covariates (e.g., some clustering algorithms), or when ComBat-Seq is used (which preserves count properties and is safe as input to DE methods).
+
+### Batch factor known
+
+**ComBat-Seq** (`sva::ComBat_seq`) — operates on raw counts using a NB GLM; preferred over the original ComBat (which assumes log-normal data):
+
+```r
+# R/batch_correction.R
+correct_batch_combatseq <- function(counts, meta, batch_col, group_col = NULL) {
+  library(sva)
+  group <- if (!is.null(group_col)) meta[[group_col]] else NULL
+  ComBat_seq(
+    counts = counts,
+    batch  = meta[[batch_col]],
+    group  = group
+  )
+}
+```
+
+**Harman** (`Harman::harman`) — operates on pre-normalized log-scale data; appropriate for voom-transformed expression matrices or microarray data.
+
+### Batch factor unknown
+
+**svaseq** (`sva::svaseq`) — estimates surrogate variables (SVs) from residuals; include SVs as covariates in the design matrix (do not pre-correct counts):
+
+```r
+# R/batch_correction.R
+estimate_surrogate_variables <- function(counts_norm, meta, full_formula,
+                                          null_formula = ~ 1) {
+  library(sva)
+  mod  <- model.matrix(full_formula, data = meta)
+  mod0 <- model.matrix(null_formula, data = meta)
+  svobj <- svaseq(log1p(counts_norm), mod, mod0)
+  # Returns svobj$sv: matrix of n_samples x n_sv
+  # Bind columns to meta and add to design formula
+  svobj
+}
+```
+
+**RUVSeq** (`RUVSeq::RUVr`, `RUVg`, `RUVs`) — factor analysis of SVD; use RUVr when no negative control genes are available. Resulting W factors should be included as design covariates.
+
+### Diagnostics
+
+Always run PCA/MDS before and after batch correction to verify the batch structure was removed without distorting the biological signal:
+
+```r
+# Use plot_pca() from R/diagnostics.R — call once on uncorrected,
+# once on corrected data, and compare visually.
+# A good correction: batch cluster separation disappears;
+# condition/timepoint separation is preserved or enhanced.
+```
+
+**Warning:** `limma::removeBatchEffect()` is appropriate for visualization only. Never use its output as input to a DE model — it removes degrees of freedom that the model needs and inflates false positives.
+
+### The review's recommendation for time course data
+
+From Oh & Li (2021): use **ComBat-Seq, svaseq, and RUVSeq** as a diagnostic panel on pre-filtered and normalized data. For actual correction prior to dynamic DE analysis, use **ComBat-Seq** (known batch) or **Harman** (known batch, log-scale input). When batch factors are unknown, include svaseq or RUVSeq surrogate variables in the design matrix.
+
+---
+
+## 10. References
+
+- **Oh & Li (2021)** — comprehensive review of dynamic methods, normalization, and batch correction for time course RNA-seq:
+  https://pmc.ncbi.nlm.nih.gov/articles/PMC7997275/ (synthesized in `references/oh-li-2021-review.md`)
+- **Spies et al. (2019)** — large-scale benchmark of time course DE methods:
+  https://pmc.ncbi.nlm.nih.gov/articles/PMC6357553/
 - **limma User's Guide** Ch. 15 (RNA-seq with voom), Ch. 18 (time series / longitudinal):
   https://www.bioconductor.org/packages/release/bioc/vignettes/limma/inst/doc/usersguide.pdf
 - **timecourse package**: Tai & Speed (2006). Biometrics.
