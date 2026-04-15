@@ -1,5 +1,5 @@
 ---
-name: rnaseq-timeseries-de
+name: bulk-rnaseq-timeseries-de
 description: >
   Differential expression analysis for bulk RNA-seq time series and repeated-measures
   experiments. Use this skill whenever the user has longitudinal RNA-seq data, multiple
