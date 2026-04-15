@@ -64,9 +64,9 @@ depends on the prior stage's outputs.
 
 | Agent | File | When to invoke |
 |---|---|---|
-| Code Writer | `agents/code-writer.md` | User asks to write or update R source functions |
-| Tester | `agents/tester.md` | After code-writer finishes, or when user asks to test existing functions |
-| Notebook Writer | `agents/notebook-writer.md` | After tester passes, or when user asks to generate/update the Quarto notebook |
+| Code Writer | `agents/code-writer-bulk-rnaseq-timeseries.md` | User asks to write or update R source functions |
+| Tester | `agents/tester-bulk-rnaseq-timeseries.md` | After code-writer finishes, or when user asks to test existing functions |
+| Notebook Writer | `agents/notebook-writer-bulk-rnaseq-timeseries.md` | After tester passes, or when user asks to generate/update the Quarto notebook |
 
 **Typical full workflow:**
 
